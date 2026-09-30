@@ -1,0 +1,20 @@
+{
+  "name": "toolsense-simulator",
+  "version": "1.0.0",
+  "description": "ToolSense data simulator for testing backend with realistic sensor data",
+  "type": "module",
+  "main": "simulate.js",
+  "scripts": {
+    "generate": "node generate-test-data.js",
+    "simulate": "node simulate.js",
+    "test": "node generate-test-data.js && node simulate.js --interval 200"
+  },
+  "keywords": [
+    "cnc",
+    "tool-wear",
+    "simulator",
+    "testing"
+  ],
+  "author": "",
+  "license": "MIT"
+}
