@@ -26,7 +26,10 @@ export default function App() {
   }, []);
 
   const t = s.threshold, last = rows.at(-1);
-  const st = last ? STATUS[last.rec] : { label: "Idle", tone: "idle", advice: "Press Start to begin the simulation." };
+  const exceeded = last && last.pred >= t;
+  const st = !last ? { label: "Idle", tone: "idle", advice: "Press Start to begin the simulation." }
+    : exceeded ? { label: "Limit exceeded", tone: "bad", advice: "Wear is past the limit. Stop and change the tool." }
+    : STATUS[last.rec];
   const done = s.total && s.index >= s.total;
   const worst = last ? last.flutes.indexOf(Math.max(...last.flutes)) : -1;
   const used = last ? Math.min(100, (last.pred / t) * 100) : 0;
@@ -55,7 +58,7 @@ export default function App() {
 
       <section className={`hero ${st.tone}`}>
         <div className="dot" />
-        <div className="heroText"><span>Tool status</span><b>{st.label}</b><small>{st.advice}</small></div>
+        <div className="heroText"><span>Tool status</span><b>{st.label}</b><small>{st.advice}</small>{last && <small className="mono">API action: {last.rec} · Normal under {Math.round(t * 0.6)} µm, Warning under {Math.round(t * 0.85)} µm</small>}</div>
         <div className="life">
           <span>Wear limit used</span>
           <div className="bar big"><div style={{ width: `${used}%` }} /></div>
@@ -135,7 +138,7 @@ export default function App() {
             {rows.slice(-6).reverse().map(r => (
               <tr key={r.cut}><td>{r.cut}</td>{r.flutes.map((f, i) => <td key={i}>{fmt(f)}</td>)}
                 <td>{fmt(r.pred)}</td><td>{r.rul ?? "—"}</td>
-                <td><span className={`pill ${STATUS[r.rec].tone}`}>{STATUS[r.rec].label}</span></td></tr>
+                <td>{r.pred >= t ? <span className="pill bad">Limit exceeded</span> : <span className={`pill ${STATUS[r.rec].tone}`}>{STATUS[r.rec].label}</span>}</td></tr>
             ))}
             {!rows.length && <tr><td colSpan="7" className="muted">No data yet</td></tr>}
           </tbody>

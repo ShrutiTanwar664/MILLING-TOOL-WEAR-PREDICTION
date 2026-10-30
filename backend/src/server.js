@@ -21,6 +21,12 @@ app.get("/api/readings", (req, res) => {
 });
 app.get("/api/readings/latest", (_, res) => res.json(sim.readings.at(-1) ?? null));
 
+// Mobile app polls this: state plus only the readings after index `since`.
+app.get("/api/snapshot", (req, res) => {
+  const since = Number(req.query.since) || 0;
+  res.json({ state: sim.state, count: sim.readings.length, readings: sim.readings.slice(since) });
+});
+
 // Live push (Server-Sent Events): dashboard gets each cut as it happens.
 app.get("/api/stream", (req, res) => {
   res.set({ "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
