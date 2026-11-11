@@ -1,11 +1,65 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, ScrollView, Pressable, Modal, StyleSheet, Platform, StatusBar, useWindowDimensions } from "react-native";
-import { snapshot, control } from "./src/api";
-import LineChart from "./src/LineChart";
-import Logo from "./src/Logo";
-import { LEVELS, levelOf, alertEvents } from "./src/alerts";
-import { startAlarm, stopAlarm, nudge } from "./src/alarm";
+import { View, Text, ScrollView, Pressable, Modal, StyleSheet, Platform, StatusBar, Vibration, useWindowDimensions } from "react-native";
+import Svg, { Rect, G, Path, Circle, Line, Text as SText } from "react-native-svg";
+import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 
+// ---------------------------------------------------------------- config
+const API_URL = "https://milling-tool-wear-prediction.onrender.com"; // no trailing slash
+
+// ---------------------------------------------------------------- api
+async function call(path, opts) {
+  const r = await fetch(API_URL + path, opts);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+const snapshot = since => call(`/api/snapshot?since=${since}`);
+const control = (a, b = {}) => call(`/api/simulation/${a}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b) });
+
+// ---------------------------------------------------------------- alert levels
+const LEVELS = [
+  { label: "Normal", tone: "ok", text: "Operating normally. Continue machining." },
+  { label: "Warning", tone: "warn", text: "Wear is rising. Reduce feed and plan a tool change." },
+  { label: "Critical", tone: "bad", text: "Wear is close to the limit. Replace the tool now." },
+  { label: "Limit exceeded", tone: "bad", text: "Wear has passed the limit. Stop machining and change the tool." },
+];
+const REC = { continue: 0, reduce_feed: 1, replace_tool: 2 };
+const levelOf = (r, t) => (r.pred >= t ? 3 : REC[r.rec] ?? 0);
+function alertEvents(rows, t) {
+  const out = []; let seen = 0;
+  for (const r of rows) { const l = levelOf(r, t); if (l > seen) { out.push({ cut: r.cut, level: l, wear: r.pred }); seen = l; } }
+  return out;
+}
+
+// ---------------------------------------------------------------- alarm (sound + vibration)
+// Needs mobile/assets/alarm.wav and the expo-audio package. If sound fails, vibration and the
+// full-screen alarm still work, and the reason is shown on the alarm screen.
+let player = null, audioErr = null, buzzTimer = null, run = 0;
+try {
+  Promise.resolve(setAudioModeAsync({ playsInSilentMode: true })).catch(() => {});
+  player = createAudioPlayer(require("./assets/alarm.wav"));
+  player.loop = true;
+  player.volume = 1;
+} catch (e) { audioErr = String(e?.message || e); }
+
+const buzz = () => Vibration.vibrate([0, 300, 150, 300]);
+function startAlarm(sound) {
+  stopAlarm();
+  const me = run;
+  if (sound && player) {
+    try { Promise.resolve(player.seekTo(0)).catch(() => {}).then(() => { if (me === run) player.play(); }); }
+    catch (e) { audioErr = String(e?.message || e); }
+  }
+  buzz();
+  buzzTimer = setInterval(buzz, 1600);
+}
+function stopAlarm() {
+  run++;
+  clearInterval(buzzTimer); buzzTimer = null;
+  Vibration.cancel();
+  try { player?.pause(); } catch {}
+}
+
+// ---------------------------------------------------------------- theme
 const C = { bg: "#f2f3f5", panel: "#fff", line: "#dfe2e7", ink: "#14181f", muted: "#5f6877", soft: "#8a93a3",
   ok: "#1a7f4b", warn: "#b45309", bad: "#c62828", okBg: "#e8f5ee", warnBg: "#fdf3e3", badBg: "#fdecec" };
 const TONE = { ok: [C.ok, C.okBg], warn: [C.warn, C.warnBg], bad: [C.bad, C.badBg], idle: [C.muted, C.panel] };
@@ -14,6 +68,46 @@ const zone = (w, t) => (w / t < 0.6 ? "ok" : w / t < 0.85 ? "warn" : "bad");
 const fmt = (v, d = 1) => (v == null ? "—" : Number(v).toFixed(d));
 const num = { fontVariant: ["tabular-nums"] };
 
+// ---------------------------------------------------------------- logo (three-flute end mill)
+function Logo({ size = 34 }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 32 32">
+      <Rect width="32" height="32" rx="7" fill="#14181f" />
+      <G fill="#fff" transform="translate(16 16)">
+        {[0, 120, 240].map(a => <Path key={a} transform={`rotate(${a})`} d="M0 0C0-5 2.5-9 7-10 7.5-5 4.5-1 0 0Z" />)}
+      </G>
+      <Circle cx="16" cy="16" r="2" fill="#14181f" />
+    </Svg>
+  );
+}
+
+// ---------------------------------------------------------------- tiny line chart
+function Chart({ width, height = 200, xMax, yMax, limit, bands = [], series }) {
+  const p = { l: 34, r: 8, t: 8, b: 8 };
+  const w = width - p.l - p.r, h = height - p.t - p.b;
+  const x = i => p.l + (i / Math.max(1, xMax)) * w;
+  const y = v => p.t + h - (Math.min(v, yMax) / yMax) * h;
+  const path = data => {
+    let d = "", pen = false;
+    data.forEach((v, i) => { if (v == null) { pen = false; return; } d += `${pen ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)} `; pen = true; });
+    return d;
+  };
+  return (
+    <Svg width={width} height={height}>
+      {bands.map((b, i) => <Rect key={i} x={p.l} y={y(b.to)} width={w} height={y(b.from) - y(b.to)} fill={b.color} opacity={0.1} />)}
+      {[0, 0.25, 0.5, 0.75, 1].map(f => (
+        <G key={f}>
+          <Line x1={p.l} x2={width - p.r} y1={y(f * yMax)} y2={y(f * yMax)} stroke="#eef0f3" />
+          <SText x={p.l - 4} y={y(f * yMax) + 4} fontSize="10" fill={C.muted} textAnchor="end">{Math.round(f * yMax)}</SText>
+        </G>
+      ))}
+      {limit != null && <Line x1={p.l} x2={width - p.r} y1={y(limit)} y2={y(limit)} stroke={C.bad} strokeDasharray="4 4" />}
+      {series.map((s, i) => <Path key={i} d={path(s.data)} stroke={s.color} strokeWidth={s.w || 2} strokeDasharray={s.dash} fill="none" />)}
+    </Svg>
+  );
+}
+
+// ---------------------------------------------------------------- app
 export default function App() {
   const { width } = useWindowDimensions();
   const chartW = width - 68;
@@ -22,6 +116,7 @@ export default function App() {
   const [online, setOnline] = useState(null);
   const [sound, setSound] = useState(true);
   const [ack, setAck] = useState(0);
+  const [test, setTest] = useState(false);
   const [toast, setToast] = useState(null);
   const count = useRef(0), prev = useRef(null);
 
@@ -53,21 +148,23 @@ export default function App() {
   const L = LEVELS[level];
   const [fg, bg] = TONE[last ? L.tone : "idle"];
   const alarm = level >= 2 && ack < level;
+  const ringing = alarm || test;
   const events = useMemo(() => alertEvents(rows, t).reverse(), [rows, t]);
   const done = s.index >= s.total;
   const used = last ? Math.min(100, (last.pred / t) * 100) : 0;
   const worst = last ? last.flutes.indexOf(Math.max(...last.flutes)) : -1;
   const yMax = Math.round(t * 1.3);
   const rulMax = Math.max(50, ...rows.map(r => r.rul ?? 0));
+  const dismiss = () => { setAck(level); setTest(false); };
 
   useEffect(() => {
     if (!last) { prev.current = null; setAck(0); return; }
     if (prev.current === null) { prev.current = level; return; }
-    if (level === 1 && prev.current < 1) { nudge(); setToast({ cut: last.cut }); setTimeout(() => setToast(null), 6000); }
+    if (level === 1 && prev.current < 1) { Vibration.vibrate(200); setToast({ cut: last.cut }); setTimeout(() => setToast(null), 6000); }
     prev.current = level;
   }, [last?.cut, level]);
 
-  useEffect(() => { if (alarm) startAlarm(sound); else stopAlarm(); return stopAlarm; }, [alarm, sound]);
+  useEffect(() => { if (ringing) startAlarm(sound); else stopAlarm(); return stopAlarm; }, [ringing, sound]);
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -78,7 +175,6 @@ export default function App() {
             <Text style={S.h1}>ToolSense</Text>
             <Text style={S.muted}>Tool condition monitoring</Text>
           </View>
-          <Pressable onPress={() => setSound(v => !v)} style={S.mini}><Text style={S.miniT}>Sound {sound ? "on" : "off"}</Text></Pressable>
         </View>
 
         <View style={S.strip}>
@@ -102,6 +198,10 @@ export default function App() {
               <Text style={[S.segT, s.delay === v && { color: "#fff" }]}>{n}</Text>
             </Pressable>
           ))}
+        </View>
+        <View style={S.row}>
+          <Btn small label={`Alarm sound: ${sound ? "On" : "Off"}`} onPress={() => setSound(v => !v)} />
+          <Btn small label="Test alarm" onPress={() => setTest(true)} />
         </View>
 
         <View style={[S.panel, { borderLeftWidth: 4, borderLeftColor: last ? fg : C.soft, marginTop: 14 }]}>
@@ -135,14 +235,14 @@ export default function App() {
         </Panel>
 
         <Panel title="Tool wear (µm)">
-          <LineChart width={chartW} xMax={s.total} yMax={yMax} limit={t}
+          <Chart width={chartW} xMax={s.total} yMax={yMax} limit={t}
             bands={[{ from: 0, to: t * 0.6, color: C.ok }, { from: t * 0.6, to: t * 0.85, color: C.warn }, { from: t * 0.85, to: yMax, color: C.bad }]}
             series={[{ data: rows.map(r => r.actual), color: C.soft, dash: "4 3", w: 1.75 }, { data: rows.map(r => r.pred), color: "#1f4fd8", w: 2.25 }]} />
           <Text style={S.small}>Blue: predicted. Dashed grey: measured. Red line: wear limit.</Text>
         </Panel>
 
         <Panel title="Remaining useful life (cuts)">
-          <LineChart width={chartW} height={160} xMax={s.total} yMax={Math.ceil(rulMax / 50) * 50} series={[{ data: rows.map(r => r.rul), color: C.ink }]} />
+          <Chart width={chartW} height={160} xMax={s.total} yMax={Math.ceil(rulMax / 50) * 50} series={[{ data: rows.map(r => r.rul), color: C.ink }]} />
         </Panel>
 
         <Panel title={`Alerts${events.length ? ` (${events.length})` : ""}`}>
@@ -179,14 +279,16 @@ export default function App() {
 
       {toast && <View style={S.toast}><Text style={S.label}>Warning · cut {toast.cut}</Text><Text style={S.small}>{LEVELS[1].text}</Text></View>}
 
-      <Modal visible={alarm} transparent animationType="fade" onRequestClose={() => setAck(level)}>
+      <Modal visible={ringing} transparent animationType="fade" onRequestClose={dismiss}>
         <View style={S.scrim}>
           <View style={S.alarmCard}>
-            <Text style={S.alarmEye}>ALARM</Text>
-            <Text style={S.alarmTitle}>{L.label}</Text>
-            <Text style={S.alarmBody}>{L.text}</Text>
-            <Text style={[S.alarmBody, num]}>Cut {last?.cut} · {fmt(last?.pred)} µm · RUL {last?.rul ?? "—"} cuts</Text>
-            <Pressable style={S.alarmBtn} onPress={() => setAck(level)}><Text style={S.alarmBtnT}>Acknowledge</Text></Pressable>
+            <Text style={S.alarmEye}>{alarm ? "ALARM" : "ALARM TEST"}</Text>
+            <Text style={S.alarmTitle}>{alarm ? L.label : "Test alarm"}</Text>
+            <Text style={S.alarmBody}>{alarm ? L.text : "If you can hear this and feel the vibration, the alarm works."}</Text>
+            {alarm && <Text style={[S.alarmBody, num]}>Cut {last?.cut} · {fmt(last?.pred)} µm · RUL {last?.rul ?? "—"} cuts</Text>}
+            {sound && audioErr && <Text style={S.alarmBody}>Sound unavailable: {audioErr}</Text>}
+            {!sound && <Text style={S.alarmBody}>Alarm sound is off (vibration only).</Text>}
+            <Pressable style={S.alarmBtn} onPress={dismiss}><Text style={S.alarmBtnT}>{alarm ? "Acknowledge" : "Stop"}</Text></Pressable>
           </View>
         </View>
       </Modal>
@@ -202,9 +304,9 @@ const Metric = ({ label, value, unit, sub }) => (
     <Text style={S.small}>{sub}</Text>
   </View>
 );
-const Btn = ({ label, onPress, primary, disabled }) => (
-  <Pressable disabled={disabled} onPress={onPress} style={[S.btn, primary && { backgroundColor: C.ink, borderColor: C.ink }, disabled && { opacity: 0.45 }]}>
-    <Text style={[S.btnT, primary && { color: "#fff" }]}>{label}</Text>
+const Btn = ({ label, onPress, primary, disabled, small }) => (
+  <Pressable disabled={disabled} onPress={onPress} style={[S.btn, small && { height: 38 }, primary && { backgroundColor: C.ink, borderColor: C.ink }, disabled && { opacity: 0.45 }]}>
+    <Text style={[S.btnT, small && { fontSize: 13 }, primary && { color: "#fff" }]}>{label}</Text>
   </Pressable>
 );
 
@@ -212,8 +314,6 @@ const S = StyleSheet.create({
   content: { padding: 16, paddingTop: Platform.OS === "ios" ? 60 : (StatusBar.currentHeight || 24) + 12, paddingBottom: 56 },
   header: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
   h1: { fontSize: 20, fontWeight: "600", color: C.ink }, muted: { color: C.muted, fontSize: 13, marginTop: 2 },
-  mini: { borderWidth: 1, borderColor: C.line, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, backgroundColor: C.panel },
-  miniT: { fontSize: 12, color: C.ink, fontWeight: "500" },
   strip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, borderTopWidth: 1, borderTopColor: C.line },
   dot: { width: 8, height: 8, borderRadius: 4 },
   track: { height: 5, backgroundColor: C.line, borderRadius: 3, overflow: "hidden", marginTop: 4 }, fill: { height: "100%" },
