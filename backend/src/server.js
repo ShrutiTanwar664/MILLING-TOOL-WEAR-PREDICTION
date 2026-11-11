@@ -2,7 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { fileURLToPath } from "url";
-import { sim, start, pause, reset } from "./simulator.js";
+import { sim, start, pause, reset, setSpeed } from "./simulator.js";
 
 const app = express();
 app.use(cors(), express.json());
@@ -11,9 +11,7 @@ app.get("/api/simulation/status", (_, res) => res.json(sim.state));
 app.post("/api/simulation/start", (req, res) => { start(req.body?.delay); res.json(sim.state); });
 app.post("/api/simulation/pause", (_, res) => { pause(); res.json(sim.state); });
 app.post("/api/simulation/reset", async (_, res) => { await reset(); res.json(sim.state); });
-app.post("/api/simulation/speed", (req, res) => {
-  sim.state.delay = Number(req.body.delay) || 800; res.json(sim.state);
-});
+app.post("/api/simulation/speed", (req, res) => { setSpeed(req.body?.delay); res.json(sim.state); });
 
 app.get("/api/readings", (req, res) => {
   const n = Number(req.query.limit) || sim.readings.length;

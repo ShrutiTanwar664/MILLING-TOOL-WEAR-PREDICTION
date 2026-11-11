@@ -18,7 +18,7 @@ const shown = KEY.map(k => names.find(n => n.toLowerCase().startsWith(k) && /mea
 const showNames = shown.length ? shown : names.slice(0, 7);
 
 export const sim = {
-  state: { running: false, index: 0, total: rows.length, delay: 800, error: null,
+  state: { running: false, index: 0, total: rows.length, delay: 500, error: null,
            threshold: Number(process.env.THRESHOLD) || 180 },
   readings: [], clients: new Set(), timer: null,
 };
@@ -30,6 +30,7 @@ const pushState = () => send("state", sim.state);
 
 async function tick() {
   const s = sim.state;
+  const t0 = Date.now();
   if (!s.running) return;
   if (s.index >= rows.length) { s.running = false; return pushState(); }
   const row = rows[s.index];
@@ -57,7 +58,7 @@ async function tick() {
   } catch (e) {
     s.running = false; s.error = e.message; pushState(); return;
   }
-  if (s.running) sim.timer = setTimeout(tick, s.delay);
+  if (s.running) sim.timer = setTimeout(tick, Math.max(0, s.delay - (Date.now() - t0))); // delay counts from tick start, so API latency doesn't stack on top
 }
 
 export function start(delay) {
@@ -67,6 +68,7 @@ export function start(delay) {
   sim.state.running = true; sim.state.error = null; pushState();
   tick();
 }
+export function setSpeed(d) { sim.state.delay = Math.max(20, Number(d) || 500); pushState(); }
 export function pause() { clearTimeout(sim.timer); sim.state.running = false; pushState(); }
 export async function reset() {
   clearTimeout(sim.timer);
