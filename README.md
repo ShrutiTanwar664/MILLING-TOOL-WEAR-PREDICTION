@@ -4,7 +4,7 @@ ToolSense is a tool-condition monitoring system for CNC milling. It predicts how
 
 A machine learning model was trained on two milling runs of the PHM Society 2010 dataset (cutters c1 and c4). A third, unseen run (c6) is replayed cut by cut to **simulate a live machine**, so the system can be demonstrated without physical sensors.
 
-**Team:** Anushka, Shruti, Divyaraj, Piyush, Abhishek Pareek and Dr. Mandeep Dhanda, MNNIT Allahabad.
+**Team:** Anushka, Shruti, Divyaraj, Piyush, Abhishek Pareek .
 
 ---
 
